@@ -1,0 +1,125 @@
+#!/bin/bash
+#
+# Edit XML files in an Open Document Format file
+#
+
+if [ -z "$1" ]; then
+    echo "Usage: `basename $0` FILENAME"
+    exit 10
+fi
+
+if [ ! -f "$1" ]; then
+    echo "File not found or not a regular file: $1"
+    exit 20
+fi
+
+if ! TMPDIR=$(mktemp -d -t viodf.XXXXXXXXXX) ; then
+    echo "Failed to create temporary directory."
+    exit 30
+fi
+
+DIALOG="dialog --ascii-lines"
+
+# determine editor to use
+if [ -z "$EDITOR" ]; then
+    if [ -x /usr/bin/editor ]; then
+        EDITOR=/usr/bin/editor
+    elif vim --version > /dev/null 2>&1 ; then
+        EDITOR=vim
+    elif vi --version > /dev/null 2>&1 ; then
+        EDITOR=vi
+    elif nano --version > /dev/null 2>&1 ; then
+        EDITOR=nano
+    else
+        echo "EDITOR not set and did not find vi, vim, nano or /usr/bin/editor - exiting."
+        exit 40
+    fi
+fi
+echo "EDITOR=$EDITOR"
+
+# determine diff to use
+if git --version > /dev/null 2>&1 ; then
+    DIFF="git diff --word-diff"
+elif diff --version > /dev/null 2>&1 ; then
+    DIFF="diff"
+else
+    echo "Neither git(1) nor diff(1) found - exiting."
+    exit 50
+fi
+echo "DIFF=$DIFF"
+
+# check if xmllint is installed
+if xmllint --version > /dev/null 2>&1 ; then
+    XML_PRETTY="xmllint --format"
+    XML_REVERSE="xmllint --noblanks"
+else
+    XML_PRETTY="cat"
+    XML_REVERSE="cat"
+fi
+echo "XML_PRETTY=${XML_PRETTY}"
+echo "XML_REVERSE=${XML_REVERSE}"
+
+ODFF=$1
+if [[ "$ODFF" = /* ]]; then
+    OWD=""
+else
+    OWD="$(pwd)/"
+fi
+
+echo "Unpacking to ${TMPDIR}..."
+
+(
+    cd "${TMPDIR}"
+
+    if unzip -q "${OWD}${ODFF}" ; then
+
+        while File=$($DIALOG --menu "Choose file to edit" 30 80 20 $(find . -type f -print | while read ln ; do echo $ln ; echo "[edit]" ; done) 3>&1 1>&2 2>&3 3>&-)
+        do
+            ${XML_PRETTY} "${File}" > "${File}~original"
+            cp "${File}~original" "${File}~edit"
+            ${EDITOR} "${File}~edit"
+            ${DIFF} "${File}~original" "${File}~edit"
+            echo -n "Stage change? [n]"
+            read yn
+            if [[ "$yn" = [yY] ]]
+            then
+                ${XML_REVERSE} "${File}~edit" > "${File}"
+            fi
+            rm -f "${File}~edit"
+            rm -f "${File}~original"
+        done
+
+        echo "Changed files:"
+
+        find . -type f -newer "${OWD}${ODFF}"
+
+    else # unzip failed
+
+        echo "Could not unzip file."
+        exit 60
+
+    fi
+
+) && (
+
+    echo ; echo -n "Commit changes? [n]"
+
+    read yn
+
+    if [[ "$yn" = [yY] ]]; then
+
+        echo "Saving backup copy as $ODFF~"
+
+        cp "${ODFF}" "${ODFF}~"
+
+        echo "Updating ${ODFF}..."
+
+        ( cd "${TMPDIR}" ; zip -u -D -r "${OWD}${ODFF}" * )
+
+    fi
+)
+
+echo "Removing $TMPDIR"
+
+rm -rf "${TMPDIR}"
+
